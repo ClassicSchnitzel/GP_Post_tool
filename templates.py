@@ -48,7 +48,7 @@ GAME_TEMPLATES = {
         },
         "player_welcome_foreground": "assets/overlays/player_welcome_fade.png",
         "player_welcome_placeholder": "assets/placeholders/player_welcome_placeholder.png",
-        "maps": ["Clubhouse", "Oregon", "Kafe", "Bank", "Chalet", "Border", "Nighthaven"],
+        "maps": ["Clubhouse", "Oregon", "Kafe", "Bank", "Chalet", "Border", "Nighthaven", "Clubhouse", "Lair", "Konsulat", "Skyscraper" ,],
         "leagues": ["ESEA", "ESL", "Major"],
     },
     "Rocket League": {
