@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import sys
 import traceback
 import urllib.request
@@ -8,6 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from urllib.parse import unquote, urlparse
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageTk
 
@@ -27,6 +29,9 @@ HOME_LOGO_FOLDER_BY_GAME = {
     "Rocket League": "RL",
     "Call of Duty": "COD",
 }
+
+MATCHDAY_ADDITIONAL_EXPORT_SIZE = (800, 320)
+MATCHDAY_DC_PREVIEW_SIZE = (400, 160)
 
 
 def resolve_asset(relative_path):
@@ -51,13 +56,12 @@ def slugify(value):
 
 @lru_cache(maxsize=32)
 def get_font(size, bold=False):
-    if not bold:
-        koulen_path = resolve_asset("assets/fonts/Koulen-Regular.ttf")
-        if os.path.exists(koulen_path):
-            try:
-                return ImageFont.truetype(koulen_path, size)
-            except OSError:
-                pass
+    koulen_path = resolve_asset("assets/fonts/Koulen-Regular.ttf")
+    if os.path.exists(koulen_path):
+        try:
+            return ImageFont.truetype(koulen_path, size)
+        except OSError:
+            pass
 
     candidates = []
     if bold:
@@ -107,6 +111,33 @@ def parse_score(value):
         return int(value)
     except ValueError:
         return 0
+
+
+def clean_filename_part(value, max_length=None, fallback="item"):
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "").strip())
+    cleaned = cleaned.strip("_")
+    if not cleaned:
+        cleaned = fallback
+    if max_length is not None:
+        cleaned = cleaned[:max_length].rstrip("_") or fallback
+    return cleaned
+
+
+def source_name_from_path(path_value, fallback="item"):
+    if not path_value:
+        return fallback
+    base_name = os.path.basename(path_value)
+    stem, _ = os.path.splitext(base_name)
+    return clean_filename_part(stem, max_length=8, fallback=fallback)
+
+
+def source_name_from_url(url_value, fallback="item"):
+    if not url_value:
+        return fallback
+    parsed = urlparse(url_value)
+    base_name = os.path.basename(unquote(parsed.path))
+    stem, _ = os.path.splitext(base_name)
+    return clean_filename_part(stem, max_length=8, fallback=fallback)
 
 
 def app_settings_path():
@@ -173,6 +204,7 @@ class PostingApp(tk.Tk):
         self.map_away_score_vars = [tk.StringVar(value="0") for _ in range(5)]
 
         self.preview_image_tk = None
+        self.matchday_dc_preview_image_tk = None
         self.home_logo_files_by_game = self.discover_home_logos_by_game()
         self.league_preset_files = []  # Wird dynamisch geladen basierend auf dem Spiel
         self.custom_league_files = []  # Additionale benutzer-define Liga-Ordner
@@ -190,6 +222,7 @@ class PostingApp(tk.Tk):
         self.ui_toggle_on = "#1ea653"
 
         self.current_render_image = None
+        self.current_matchday_dc_image = None
         self.preview_after_id = None
         self.preview_rebuild_requested = False
         self.image_cache = {}
@@ -798,13 +831,38 @@ class PostingApp(tk.Tk):
         preview_panel, preview_body = self.create_panel(root, "VORSCHAU FENSTER")
         preview_panel.grid(row=1, column=1, sticky="nsew")
         preview_body.grid_rowconfigure(0, weight=1)
-        preview_body.grid_columnconfigure(0, weight=1)
+        preview_body.grid_columnconfigure(0, weight=2)
+        preview_body.grid_columnconfigure(1, weight=1)
         preview_body.configure(bg=self.ui_bg)
         self.preview_container = preview_body
         self.preview_container.bind("<Configure>", self.on_preview_container_resize)
 
+        self.preview_primary_frame = tk.Frame(preview_body, bg=self.ui_bg)
+        self.preview_primary_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self.preview_primary_frame.grid_rowconfigure(1, weight=1)
+        self.preview_primary_frame.grid_columnconfigure(0, weight=1)
+
+        self.preview_primary_title = tk.Label(
+            self.preview_primary_frame,
+            text="1080 x 1350",
+            bg=self.ui_bg,
+            fg=self.ui_text,
+            font=("Arial", 11, "bold"),
+            anchor="w",
+        )
+        self.preview_primary_title.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        self.preview_primary_stage = tk.Frame(
+            self.preview_primary_frame,
+            bg=self.ui_bg,
+            width=PREVIEW_SIZE[0],
+            height=PREVIEW_SIZE[1],
+        )
+        self.preview_primary_stage.grid(row=1, column=0, sticky="n")
+        self.preview_primary_stage.grid_propagate(False)
+
         self.preview_label = tk.Label(
-            preview_body,
+            self.preview_primary_stage,
             bg=self.ui_bg,
             bd=1,
             relief="solid",
@@ -813,6 +871,40 @@ class PostingApp(tk.Tk):
             highlightcolor="#5b6878",
         )
         self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.matchday_dc_preview_frame = tk.Frame(preview_body, bg=self.ui_bg)
+        self.matchday_dc_preview_frame.grid_rowconfigure(1, weight=1)
+        self.matchday_dc_preview_frame.grid_columnconfigure(0, weight=1)
+
+        self.matchday_dc_preview_title = tk.Label(
+            self.matchday_dc_preview_frame,
+            text="Matchday DC 800 x 320",
+            bg=self.ui_bg,
+            fg=self.ui_text,
+            font=("Arial", 11, "bold"),
+            anchor="w",
+        )
+        self.matchday_dc_preview_title.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        self.matchday_dc_preview_stage = tk.Frame(
+            self.matchday_dc_preview_frame,
+            bg=self.ui_bg,
+            width=MATCHDAY_DC_PREVIEW_SIZE[0],
+            height=MATCHDAY_DC_PREVIEW_SIZE[1],
+        )
+        self.matchday_dc_preview_stage.grid(row=1, column=0, sticky="n")
+        self.matchday_dc_preview_stage.grid_propagate(False)
+
+        self.matchday_dc_preview_label = tk.Label(
+            self.matchday_dc_preview_stage,
+            bg=self.ui_bg,
+            bd=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground="#5b6878",
+            highlightcolor="#5b6878",
+        )
+        self.matchday_dc_preview_label.place(relx=0.5, rely=0.5, anchor="center")
 
     def update_visible_sections(self):
         post_type = self.post_type_var.get()
@@ -1055,6 +1147,179 @@ class PostingApp(tk.Tk):
                 if os.path.basename(path) == filename:
                     return path
         return None
+
+    def selected_enemy_logo_source_name(self):
+        if self.enemy_logo_path:
+            return source_name_from_path(self.enemy_logo_path, fallback="enemy")
+
+        url_value = self.enemy_logo_url_var.get().strip()
+        if url_value:
+            return source_name_from_url(url_value, fallback="enemy")
+
+        return "enemy"
+
+    def selected_home_logo_source_name(self):
+        path = self.selected_home_logo_path()
+        if path:
+            return source_name_from_path(path, fallback="home")
+        return "home"
+
+    def selected_league_source_name(self):
+        league_text = self.league_var.get().strip()
+        if league_text:
+            return clean_filename_part(league_text, fallback="League")
+
+        if self.league_upload_path:
+            return source_name_from_path(self.league_upload_path, fallback="League")
+
+        url_value = self.league_url_var.get().strip()
+        if url_value:
+            return source_name_from_url(url_value, fallback="League")
+
+        preset_path = self.selected_league_preset_path()
+        if preset_path:
+            return source_name_from_path(preset_path, fallback="League")
+
+        return "League"
+
+    def selected_player_source_name(self):
+        player_name = self.player_name_var.get().strip()
+        if player_name and player_name.upper() != "PLAYER NAME":
+            return clean_filename_part(player_name, fallback="Player")
+
+        if self.player_image_path:
+            return source_name_from_path(self.player_image_path, fallback="Player")
+
+        return "Player"
+
+    def selected_date_part(self):
+        date_value = self.match_date_var.get().strip()
+        if date_value:
+            return clean_filename_part(date_value, fallback=datetime.now().strftime("%d_%m"))
+        return datetime.now().strftime("%d_%m")
+
+    def default_export_filename(self, variant="default"):
+        game_name = clean_filename_part(self.game_var.get(), fallback="Game")
+        post_type = self.post_type_var.get()
+        home_name = self.selected_home_logo_source_name()
+        enemy_name = self.selected_enemy_logo_source_name()
+
+        if post_type == "Victory":
+            return f"{game_name}_Victory_{home_name}_vs_{enemy_name}.jpg"
+        if post_type == "Defeat":
+            return f"{game_name}_Defeat_{home_name}_vs_{enemy_name}.jpg"
+        if post_type == "Matchday":
+            date_part = self.selected_date_part()
+            if variant == "dc":
+                return f"{game_name}Matchday_{home_name}_vs_{enemy_name}_{date_part}_DC.jpg"
+            return f"{game_name}_Matchday_{home_name}_vs_{enemy_name}_{date_part}.jpg"
+        if post_type == "Spieler-Welcome":
+            return f"{game_name}_Player_{self.selected_player_source_name()}.jpg"
+        if post_type == "Liga-Teilnahme":
+            return f"{game_name}_League_{self.selected_league_source_name()}.jpg"
+        return f"{game_name}_{clean_filename_part(post_type, fallback='Post')}.jpg"
+
+    def resolve_matchday_dc_background_path(self, template):
+        background_rel = template.get("backgrounds", {}).get("Matchday-DC")
+        if background_rel:
+            background_path = resolve_asset(background_rel)
+            if os.path.exists(background_path):
+                return background_path
+
+        fallback_rel = template.get("backgrounds", {}).get("Matchday")
+        if not fallback_rel:
+            return None
+
+        fallback_path = resolve_asset(fallback_rel)
+        if os.path.exists(fallback_path):
+            return fallback_path
+        return None
+
+    def build_matchday_dc_image(self, template):
+        canvas_size = MATCHDAY_ADDITIONAL_EXPORT_SIZE
+        img = Image.new("RGBA", canvas_size, template.get("base", "#101010"))
+
+        background_path = self.resolve_matchday_dc_background_path(template)
+        if background_path:
+            cached_bg = self.get_cached_fitted_image(background_path, canvas_size)
+            if cached_bg is not None:
+                img = cached_bg.copy()
+
+        draw = ImageDraw.Draw(img)
+
+        team_left_box = (20, 120, 170, 270)
+        team_right_box = (242, 120, 392, 270)
+
+        info_text = f"{self.match_date_var.get().strip()} - {self.match_time_var.get().strip()}".strip(" -")
+        if info_text:
+            info_font = get_font(44, bold=True)
+            draw.text((55, 38), info_text, font=info_font, fill="#FFFFFF")
+
+        home_center_y = int((team_left_box[1] + team_left_box[3]) / 2)
+        enemy_center_y = int((team_right_box[1] + team_right_box[3]) / 2)
+        logo_center_y = int((home_center_y + enemy_center_y) / 2)
+
+        home_logo = self.load_image_source(image_path=self.selected_home_logo_path())
+        if home_logo is not None:
+            home_logo = resize_fit_box(home_logo, 110, 110)
+            home_x = team_left_box[0] + int(((team_left_box[2] - team_left_box[0]) - home_logo.size[0]) / 2)
+            home_y = team_left_box[1] + int(((team_left_box[3] - team_left_box[1]) - home_logo.size[1]) / 2)
+            img.alpha_composite(home_logo, (home_x, home_y))
+            home_center_y = home_y + int(home_logo.size[1] / 2)
+
+        enemy_logo = None
+        if self.enemy_logo_url_img is not None:
+            enemy_logo = self.load_image_source(pil_img=self.enemy_logo_url_img)
+        else:
+            enemy_logo = self.load_image_source(image_path=self.enemy_logo_path)
+
+        if enemy_logo is None:
+            fallback_enemy_path = resolve_asset(os.path.join("assets", "placeholders", "no_logo.png"))
+            if os.path.exists(fallback_enemy_path):
+                enemy_logo = self.load_image_source(image_path=fallback_enemy_path)
+
+        if enemy_logo is not None:
+            enemy_logo = resize_fit_box(enemy_logo, 110, 110)
+            enemy_x = team_right_box[0] + int(((team_right_box[2] - team_right_box[0]) - enemy_logo.size[0]) / 2)
+            enemy_y = team_right_box[1] + int(((team_right_box[3] - team_right_box[1]) - enemy_logo.size[1]) / 2)
+            img.alpha_composite(enemy_logo, (enemy_x, enemy_y))
+            enemy_center_y = enemy_y + int(enemy_logo.size[1] / 2)
+
+        logo_center_y = int((home_center_y + enemy_center_y) / 2)
+
+        league_img = None
+        league_preset_path = self.selected_league_preset_path()
+        if self.league_url_img is not None:
+            league_img = resize_fit_box(self.league_url_img, 170, 170)
+        elif self.league_upload_path:
+            upload_img = self.load_image_source(image_path=self.league_upload_path)
+            if upload_img is not None:
+                league_img = resize_fit_box(upload_img, 170, 170)
+        elif league_preset_path:
+            preset_img = self.load_image_source(image_path=league_preset_path)
+            if preset_img is not None:
+                league_img = resize_fit_box(preset_img, 170, 170)
+
+        if league_img is not None:
+            league_y = int((canvas_size[1] - league_img.size[1]) / 2)
+            league_right_margin = league_y
+            league_x = canvas_size[0] - league_right_margin - league_img.size[0]
+            img.alpha_composite(league_img, (league_x, league_y))
+        else:
+            league_text = self.league_var.get().strip()
+            if league_text:
+                league_font = get_font(34, bold=True)
+                text_box = draw.textbbox((0, 0), league_text, font=league_font)
+                text_w = text_box[2] - text_box[0]
+                text_h = text_box[3] - text_box[1]
+                text_y = int((canvas_size[1] - text_h) / 2)
+                text_right_margin = text_y
+                text_x = canvas_size[0] - text_right_margin - text_w
+                draw.text((text_x, text_y), league_text, font=league_font, fill="#FFFFFF")
+
+        vs_font = get_font(64, bold=True)
+        draw.text((206, logo_center_y), "VS", font=vs_font, fill="#FFFFFF", anchor="mm")
+        return img.convert("RGB")
 
     def find_map_asset_path(self, game_name, map_name):
         game_slug = slugify(game_name)
@@ -1451,33 +1716,48 @@ class PostingApp(tk.Tk):
     def on_preview_container_resize(self, _event):
         self.render_preview(rebuild=False)
 
+    def update_preview_visibility(self):
+        is_matchday = self.post_type_var.get() == "Matchday"
+        if is_matchday:
+            self.matchday_dc_preview_frame.grid(row=0, column=1, sticky="nsew")
+        else:
+            self.matchday_dc_preview_frame.grid_remove()
+
     def render_preview(self, rebuild=True):
+        self.update_preview_visibility()
         if rebuild or self.current_render_image is None:
             self.current_render_image = self.build_image()
+            if self.post_type_var.get() == "Matchday":
+                self.current_matchday_dc_image = self.build_matchday_dc_image(self.selected_game_template())
+            else:
+                self.current_matchday_dc_image = None
 
         if self.current_render_image is None:
             return
 
-        container_w = self.preview_container.winfo_width() if hasattr(self, "preview_container") else 0
-        container_h = self.preview_container.winfo_height() if hasattr(self, "preview_container") else 0
-
-        if container_w <= 1 or container_h <= 1:
-            max_size = PREVIEW_SIZE
-        else:
-            max_size = (max(1, container_w - 8), max(1, container_h - 8))
-
         preview = self.current_render_image.copy()
-        preview.thumbnail(max_size, Image.Resampling.LANCZOS)
+        preview.thumbnail(PREVIEW_SIZE, Image.Resampling.LANCZOS)
         self.preview_image_tk = ImageTk.PhotoImage(preview)
         self.preview_label.configure(image=self.preview_image_tk)
         self.preview_label.configure(width=preview.width, height=preview.height)
+
+        if self.current_matchday_dc_image is not None:
+            dc_preview = self.current_matchday_dc_image.copy()
+            dc_preview.thumbnail(MATCHDAY_DC_PREVIEW_SIZE, Image.Resampling.LANCZOS)
+            self.matchday_dc_preview_image_tk = ImageTk.PhotoImage(dc_preview)
+            self.matchday_dc_preview_label.configure(image=self.matchday_dc_preview_image_tk)
+            self.matchday_dc_preview_label.configure(width=dc_preview.width, height=dc_preview.height)
+        else:
+            self.matchday_dc_preview_image_tk = None
+            self.matchday_dc_preview_label.configure(image="")
+            self.matchday_dc_preview_label.configure(width=0, height=0)
 
     def export_jpg(self):
         file_path = filedialog.asksaveasfilename(
             title="Post als JPG speichern",
             defaultextension=".jpg",
             filetypes=[("JPEG", "*.jpg *.jpeg")],
-            initialfile=f"{self.game_var.get().replace(' ', '_')}_{self.post_type_var.get().replace(' ', '_')}.jpg",
+            initialfile=self.default_export_filename(),
         )
         if not file_path:
             return
@@ -1485,7 +1765,16 @@ class PostingApp(tk.Tk):
         try:
             image = self.build_image()
             image.save(file_path, "JPEG", quality=95)
-            messagebox.showinfo("Erfolg", f"Post gespeichert:\n{file_path}")
+
+            saved_files = [file_path]
+            if self.post_type_var.get() == "Matchday":
+                extra_image = self.build_matchday_dc_image(self.selected_game_template())
+                export_dir = os.path.dirname(file_path)
+                extra_path = os.path.join(export_dir, self.default_export_filename(variant="dc"))
+                extra_image.save(extra_path, "JPEG", quality=95)
+                saved_files.append(extra_path)
+
+            messagebox.showinfo("Erfolg", "Post gespeichert:\n" + "\n".join(saved_files))
         except Exception as exc:
             messagebox.showerror("Fehler", f"Export fehlgeschlagen:\n{exc}")
 

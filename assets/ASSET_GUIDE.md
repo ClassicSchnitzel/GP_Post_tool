@@ -4,6 +4,11 @@
 - Counter Strike Vordergrund:
   - `assets/overlays/counter_strike_foreground.png`
 
+## Matchday DC Hintergrund (optional)
+- Fuer das zusaetzliche Matchday-Format 800x320 wird pro Spiel diese Datei verwendet:
+  - `assets/backgrounds/<spiel_slug>/matchday_dc.jpg`
+- Wenn diese Datei noch nicht existiert, wird automatisch der normale `matchday.jpg` Hintergrund verwendet.
+
 ## Heim-Logos (Auswahl im Tool)
 - Dateien in `assets/home_logos/` ablegen
 
