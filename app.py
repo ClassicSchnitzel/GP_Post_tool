@@ -912,11 +912,11 @@ class PostingApp(tk.Tk):
         for frame in self.dynamic_sections.values():
             frame.grid_remove()
 
-        show_team = post_type in ("Matchday", "Victory", "Defeat", "Liga-Teilnahme")
-        show_league = post_type in ("Matchday", "Victory", "Defeat", "Liga-Teilnahme")
+        show_team = post_type in ("Matchday", "Victory", "Defeat", "Draw", "Liga-Teilnahme")
+        show_league = post_type in ("Matchday", "Victory", "Defeat", "Draw", "Liga-Teilnahme")
         show_matchday = post_type == "Matchday"
         show_player = post_type == "Spieler-Welcome"
-        show_maps = post_type in ("Victory", "Defeat")
+        show_maps = post_type in ("Victory", "Defeat", "Draw")
         # Maps nicht anzeigen für Rocket League Matchday
         if game == "Rocket League" and post_type == "Matchday":
             show_maps = False
@@ -971,7 +971,7 @@ class PostingApp(tk.Tk):
         self.render_preview()
 
     def available_best_of_options(self):
-        if self.post_type_var.get() in ("Victory", "Defeat"):
+        if self.post_type_var.get() in ("Victory", "Defeat", "Draw"):
             return ["BO1", "BO2", "BO3", "BO5"]
         return ["BO1", "BO3", "BO5"]
 
@@ -995,7 +995,7 @@ class PostingApp(tk.Tk):
                 button.grid_remove()
 
     def visible_map_indices(self):
-        if self.post_type_var.get() not in ("Victory", "Defeat"):
+        if self.post_type_var.get() not in ("Victory", "Defeat", "Draw"):
             return []
 
         best_of = self.best_of_var.get()
@@ -1208,6 +1208,8 @@ class PostingApp(tk.Tk):
             return f"{game_name}_Victory_{home_name}_vs_{enemy_name}.jpg"
         if post_type == "Defeat":
             return f"{game_name}_Defeat_{home_name}_vs_{enemy_name}.jpg"
+        if post_type == "Draw":
+            return f"{game_name}_Draw_{home_name}_vs_{enemy_name}.jpg"
         if post_type == "Matchday":
             date_part = self.selected_date_part()
             if variant == "dc":
