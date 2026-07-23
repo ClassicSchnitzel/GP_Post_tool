@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import unquote, urlparse
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageTk
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageTk
 
 from templates import (
     BEST_OF_OPTIONS,
@@ -32,6 +32,11 @@ HOME_LOGO_FOLDER_BY_GAME = {
 
 MATCHDAY_ADDITIONAL_EXPORT_SIZE = (800, 320)
 MATCHDAY_DC_PREVIEW_SIZE = (400, 160)
+MAX_LINEUP_PLAYERS = 5
+LINEUP_TEAM_LOGO_SCALE = 1.5
+LINEUP_NAMES_TO_STANDINS_GAP = 30
+LINEUP_PLAYER_BOTTOM_FADE_RATIO = 0.1
+LINEUP_PLAYER_CARD_SCALE = 1.12
 
 
 def resolve_asset(relative_path):
@@ -87,6 +92,28 @@ def fit_image_pil(pil_image, box_size):
     return ImageOps.fit(pil_image.convert("RGBA"), box_size, method=Image.Resampling.LANCZOS)
 
 
+def trim_transparent_bounds(pil_image, min_alpha=8):
+    src = pil_image.convert("RGBA")
+    alpha = src.split()[3]
+    alpha_mask = alpha.point(lambda a: 255 if a > min_alpha else 0)
+    bbox = alpha_mask.getbbox()
+    if bbox is None:
+        return src
+    return src.crop(bbox)
+
+
+def fit_image_pil_contain(pil_image, box_size, trim_alpha=True):
+    src = pil_image.convert("RGBA")
+    if trim_alpha:
+        src = trim_transparent_bounds(src)
+    contained = ImageOps.contain(src, box_size, method=Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", box_size, (0, 0, 0, 0))
+    offset_x = int((box_size[0] - contained.size[0]) / 2)
+    offset_y = int((box_size[1] - contained.size[1]) / 2)
+    canvas.alpha_composite(contained, (offset_x, offset_y))
+    return canvas
+
+
 def resize_max_dimension(pil_image, max_dimension):
     image = pil_image.convert("RGBA")
     width, height = image.size
@@ -121,6 +148,20 @@ def clean_filename_part(value, max_length=None, fallback="item"):
     if max_length is not None:
         cleaned = cleaned[:max_length].rstrip("_") or fallback
     return cleaned
+
+
+def hex_to_rgb(value, fallback=(255, 255, 255)):
+    if not value:
+        return fallback
+
+    color = value.strip().lstrip("#")
+    if len(color) != 6:
+        return fallback
+
+    try:
+        return tuple(int(color[idx:idx + 2], 16) for idx in (0, 2, 4))
+    except ValueError:
+        return fallback
 
 
 def source_name_from_path(path_value, fallback="item"):
@@ -186,6 +227,8 @@ class PostingApp(tk.Tk):
         self.match_date_var = tk.StringVar(value=datetime.now().strftime("%d.%m"))
         self.match_time_var = tk.StringVar(value="19:00")
         self.player_name_var = tk.StringVar(value="PLAYER NAME")
+        self.lineup_mode_var = tk.StringVar(value="")
+        self.lineup_standins_var = tk.StringVar(value="")
 
         self.home_logo_var = tk.StringVar(value="")
         self.enemy_logo_url_var = tk.StringVar(value="")
@@ -198,6 +241,8 @@ class PostingApp(tk.Tk):
         self.league_upload_path = None
         self.league_url_img = None
         self.player_image_path = None
+        self.lineup_player_name_vars = [tk.StringVar(value="") for _ in range(MAX_LINEUP_PLAYERS)]
+        self.lineup_player_image_paths = [None for _ in range(MAX_LINEUP_PLAYERS)]
 
         self.map_vars = [tk.StringVar(value="") for _ in range(5)]
         self.map_home_score_vars = [tk.StringVar(value="0") for _ in range(5)]
@@ -209,6 +254,7 @@ class PostingApp(tk.Tk):
         self.league_preset_files = []  # Wird dynamisch geladen basierend auf dem Spiel
         self.custom_league_files = []  # Additionale benutzer-define Liga-Ordner
         self.map_rows = []
+        self.lineup_player_groups = []
 
         self.ui_bg = "#0f1720"
         self.ui_panel_bg = "#16212d"
@@ -374,6 +420,10 @@ class PostingApp(tk.Tk):
             "match_date": datetime.now().strftime("%d.%m"),
             "match_time": "19:00",
             "player_name": "PLAYER NAME",
+            "lineup_mode": "",
+            "lineup_standins": "",
+            "lineup_player_names": ["" for _ in range(MAX_LINEUP_PLAYERS)],
+            "lineup_player_image_paths": [None for _ in range(MAX_LINEUP_PLAYERS)],
             "map_names": ["" for _ in range(5)],
             "map_home_scores": ["0" for _ in range(5)],
             "map_away_scores": ["0" for _ in range(5)],
@@ -395,6 +445,10 @@ class PostingApp(tk.Tk):
             "match_date": self.match_date_var.get(),
             "match_time": self.match_time_var.get(),
             "player_name": self.player_name_var.get(),
+            "lineup_mode": self.lineup_mode_var.get(),
+            "lineup_standins": self.lineup_standins_var.get(),
+            "lineup_player_names": [item.get() for item in self.lineup_player_name_vars],
+            "lineup_player_image_paths": list(self.lineup_player_image_paths),
             "map_names": [item.get() for item in self.map_vars],
             "map_home_scores": [item.get() for item in self.map_home_score_vars],
             "map_away_scores": [item.get() for item in self.map_away_score_vars],
@@ -416,6 +470,18 @@ class PostingApp(tk.Tk):
         self.match_date_var.set(state["match_date"])
         self.match_time_var.set(state["match_time"])
         self.player_name_var.set(state["player_name"])
+        self.lineup_mode_var.set(state.get("lineup_mode", ""))
+        self.lineup_standins_var.set(state.get("lineup_standins", ""))
+
+        for idx, value in enumerate(state.get("lineup_player_names", [])):
+            if idx < len(self.lineup_player_name_vars):
+                self.lineup_player_name_vars[idx].set(value)
+
+        saved_lineup_paths = state.get("lineup_player_image_paths", [])
+        self.lineup_player_image_paths = [None for _ in range(MAX_LINEUP_PLAYERS)]
+        for idx, value in enumerate(saved_lineup_paths):
+            if idx < len(self.lineup_player_image_paths):
+                self.lineup_player_image_paths[idx] = value
 
         for idx, value in enumerate(state["map_names"]):
             if idx < len(self.map_vars):
@@ -765,6 +831,86 @@ class PostingApp(tk.Tk):
         ttk.Button(player_image_group, text="Datei auswählen", command=self.pick_player_image, style="Upload.TButton").grid(row=0, column=0, sticky="ew", pady=(0, 6))
         ttk.Button(player_image_group, text="Bild zurücksetzen", command=self.clear_player_image, style="Dark.TButton").grid(row=1, column=0, sticky="ew")
 
+        self.dynamic_sections["lineup"] = tk.LabelFrame(
+            self.param_inner,
+            text="Lineup",
+            bg=self.ui_panel_bg,
+            fg=self.ui_text,
+            bd=1,
+            relief="solid",
+            highlightthickness=0,
+            padx=8,
+            pady=8,
+        )
+        self.dynamic_sections["lineup"].grid(row=section_row, column=0, sticky="ew", pady=(0, 8))
+        self.dynamic_sections["lineup"].columnconfigure(0, weight=1)
+        section_row += 1
+
+        self.lineup_mode_group = tk.Frame(self.dynamic_sections["lineup"], bg=self.ui_panel_bg)
+        self.lineup_mode_group.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.lineup_mode_group.columnconfigure(0, weight=1)
+        ttk.Label(self.lineup_mode_group, text="Lineup Format", style="Dark.TLabel").grid(row=0, column=0, sticky="w")
+        self.lineup_mode_cb = ttk.Combobox(
+            self.lineup_mode_group,
+            textvariable=self.lineup_mode_var,
+            values=[],
+            state="readonly",
+            style="Dark.TCombobox",
+        )
+        self.lineup_mode_cb.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.lineup_mode_cb.bind("<<ComboboxSelected>>", lambda _e: self.on_lineup_mode_change())
+
+        for idx in range(MAX_LINEUP_PLAYERS):
+            player_group = tk.LabelFrame(
+                self.dynamic_sections["lineup"],
+                text=f"Main Player {idx + 1}",
+                bg=self.ui_panel_bg,
+                fg=self.ui_text,
+                bd=1,
+                relief="solid",
+                highlightthickness=0,
+                padx=8,
+                pady=8,
+            )
+            player_group.grid(row=1 + idx, column=0, sticky="ew", pady=(0, 8))
+            player_group.grid_columnconfigure(0, weight=1)
+
+            player_entry = ttk.Entry(player_group, textvariable=self.lineup_player_name_vars[idx], style="Dark.TEntry")
+            player_entry.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+            player_entry.bind("<KeyRelease>", lambda _e: self.schedule_preview_render())
+
+            ttk.Button(
+                player_group,
+                text="Bild auswählen",
+                command=lambda value=idx: self.pick_lineup_player_image(value),
+                style="Upload.TButton",
+            ).grid(row=1, column=0, sticky="ew", pady=(0, 6))
+            ttk.Button(
+                player_group,
+                text="Bild zurücksetzen",
+                command=lambda value=idx: self.clear_lineup_player_image(value),
+                style="Dark.TButton",
+            ).grid(row=2, column=0, sticky="ew")
+            self.lineup_player_groups.append(player_group)
+
+        self.lineup_standins_group = tk.LabelFrame(
+            self.dynamic_sections["lineup"],
+            text="Stand-Ins",
+            bg=self.ui_panel_bg,
+            fg=self.ui_text,
+            bd=1,
+            relief="solid",
+            highlightthickness=0,
+            padx=8,
+            pady=8,
+        )
+        self.lineup_standins_group.grid(row=1 + MAX_LINEUP_PLAYERS, column=0, sticky="ew")
+        self.lineup_standins_group.grid_columnconfigure(0, weight=1)
+        ttk.Label(self.lineup_standins_group, text="Namen mit | oder Komma trennen", style="Dark.TLabel").grid(row=0, column=0, sticky="w")
+        lineup_standins_entry = ttk.Entry(self.lineup_standins_group, textvariable=self.lineup_standins_var, style="Dark.TEntry")
+        lineup_standins_entry.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        lineup_standins_entry.bind("<KeyRelease>", lambda _e: self.schedule_preview_render())
+
         self.dynamic_sections["maps"] = tk.LabelFrame(
             self.param_inner,
             text="Maps & Ergebnisse",
@@ -912,16 +1058,22 @@ class PostingApp(tk.Tk):
         for frame in self.dynamic_sections.values():
             frame.grid_remove()
 
-        show_team = post_type in ("Matchday", "Victory", "Defeat", "Draw", "Liga-Teilnahme")
+        show_team = post_type in ("Matchday", "Victory", "Defeat", "Draw", "Liga-Teilnahme", "Lineup")
         show_league = post_type in ("Matchday", "Victory", "Defeat", "Draw", "Liga-Teilnahme")
         show_matchday = post_type == "Matchday"
         show_player = post_type == "Spieler-Welcome"
+        show_lineup = post_type == "Lineup"
         show_maps = post_type in ("Victory", "Defeat", "Draw")
         # Maps nicht anzeigen für Rocket League Matchday
         if game == "Rocket League" and post_type == "Matchday":
             show_maps = False
 
-        order = ["team", "league", "matchday", "player", "maps"]
+        if post_type in ("Matchday", "Victory", "Defeat", "Draw"):
+            self.opponent_group.grid(row=2, column=0, sticky="ew")
+        else:
+            self.opponent_group.grid_remove()
+
+        order = ["team", "league", "matchday", "player", "lineup", "maps"]
         current_row = 0
         for key in order:
             should_show = (
@@ -929,6 +1081,7 @@ class PostingApp(tk.Tk):
                 or (key == "league" and show_league)
                 or (key == "matchday" and show_matchday)
                 or (key == "player" and show_player)
+                or (key == "lineup" and show_lineup)
                 or (key == "maps" and show_maps)
             )
             if should_show:
@@ -974,6 +1127,52 @@ class PostingApp(tk.Tk):
         if self.post_type_var.get() in ("Victory", "Defeat", "Draw"):
             return ["BO1", "BO2", "BO3", "BO5"]
         return ["BO1", "BO3", "BO5"]
+
+    def available_lineup_options(self):
+        options = self.selected_game_template().get("lineup_options", [])
+        if options:
+            return options
+        return [{"label": "5 Main Player", "player_count": 5}]
+
+    def selected_lineup_option(self):
+        options = self.available_lineup_options()
+        selected_label = self.lineup_mode_var.get()
+        for option in options:
+            if option.get("label") == selected_label:
+                return option
+        return options[0]
+
+    def current_lineup_player_count(self):
+        option = self.selected_lineup_option()
+        try:
+            return max(1, min(MAX_LINEUP_PLAYERS, int(option.get("player_count", 5))))
+        except (TypeError, ValueError):
+            return 5
+
+    def sync_lineup_mode_options(self):
+        options = self.available_lineup_options()
+        labels = [item.get("label", "Lineup") for item in options]
+        self.lineup_mode_cb.configure(values=labels)
+        if self.lineup_mode_var.get() not in labels:
+            self.lineup_mode_var.set(labels[0])
+
+        if len(labels) > 1:
+            self.lineup_mode_group.grid()
+        else:
+            self.lineup_mode_group.grid_remove()
+
+    def sync_lineup_player_fields(self):
+        player_count = self.current_lineup_player_count()
+        for idx, group in enumerate(self.lineup_player_groups):
+            if idx < player_count:
+                group.configure(text=f"Main Player {idx + 1}")
+                group.grid()
+            else:
+                group.grid_remove()
+
+    def on_lineup_mode_change(self):
+        self.sync_lineup_player_fields()
+        self.render_preview()
 
     def sync_best_of_options(self):
         options = self.available_best_of_options()
@@ -1048,6 +1247,8 @@ class PostingApp(tk.Tk):
         if self.league_logo_var.get() not in league_logos:
             self.league_logo_var.set("")
 
+        self.sync_lineup_mode_options()
+        self.sync_lineup_player_fields()
         self.sync_best_of_options()
         self.sync_map_row_visibility()
 
@@ -1096,6 +1297,20 @@ class PostingApp(tk.Tk):
     def clear_player_image(self):
         self.player_image_path = None
         self.render_preview()
+
+    def pick_lineup_player_image(self, idx):
+        path = filedialog.askopenfilename(
+            title=f"Spielerbild {idx + 1} auswählen",
+            filetypes=[("Bilddateien", "*.png *.jpg *.jpeg *.webp"), ("Alle Dateien", "*.*")],
+        )
+        if path and 0 <= idx < len(self.lineup_player_image_paths):
+            self.lineup_player_image_paths[idx] = path
+            self.render_preview()
+
+    def clear_lineup_player_image(self, idx):
+        if 0 <= idx < len(self.lineup_player_image_paths):
+            self.lineup_player_image_paths[idx] = None
+            self.render_preview()
 
     def load_image_from_url(self, url):
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -1192,6 +1407,14 @@ class PostingApp(tk.Tk):
 
         return "Player"
 
+    def selected_lineup_source_name(self):
+        for idx, player_var in enumerate(self.lineup_player_name_vars):
+            player_name = player_var.get().strip()
+            if player_name:
+                return clean_filename_part(player_name, fallback=f"Player{idx + 1}")
+
+        return self.selected_home_logo_source_name()
+
     def selected_date_part(self):
         date_value = self.match_date_var.get().strip()
         if date_value:
@@ -1217,6 +1440,8 @@ class PostingApp(tk.Tk):
             return f"{game_name}_Matchday_{home_name}_vs_{enemy_name}_{date_part}.jpg"
         if post_type == "Spieler-Welcome":
             return f"{game_name}_Player_{self.selected_player_source_name()}.jpg"
+        if post_type == "Lineup":
+            return f"{game_name}_Lineup_{self.selected_lineup_source_name()}.jpg"
         if post_type == "Liga-Teilnahme":
             return f"{game_name}_League_{self.selected_league_source_name()}.jpg"
         return f"{game_name}_{clean_filename_part(post_type, fallback='Post')}.jpg"
@@ -1419,6 +1644,177 @@ class PostingApp(tk.Tk):
             (560, 1005, 860, 1175),
         ]
 
+    def lineup_placeholder_image(self, template):
+        placeholder_rel = template.get("player_welcome_placeholder", "")
+        if placeholder_rel:
+            placeholder_path = resolve_asset(placeholder_rel)
+            if os.path.exists(placeholder_path):
+                return self.load_image_source(image_path=placeholder_path)
+        return None
+
+    def build_lineup_player_card(self, player_img, card_size, accent_rgb):
+        radius = 28
+        mask = Image.new("L", card_size, 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.rounded_rectangle((0, 0, card_size[0] - 1, card_size[1] - 1), radius=radius, fill=255)
+
+        fade_mask = Image.new("L", card_size, 255)
+        fade_draw = ImageDraw.Draw(fade_mask)
+        fade_start = int(card_size[1] * (1.0 - LINEUP_PLAYER_BOTTOM_FADE_RATIO))
+        for y in range(max(0, fade_start), card_size[1]):
+            t = (y - fade_start) / max(1, (card_size[1] - fade_start - 1))
+            alpha = max(0, min(255, int(255 * (1.0 - t))))
+            fade_draw.line([(0, y), (card_size[0], y)], fill=alpha)
+
+        combined_mask = ImageChops.multiply(mask, fade_mask)
+
+        portrait = fit_image_pil_contain(player_img, card_size)
+        card = Image.new("RGBA", card_size, (0, 0, 0, 0))
+        card.paste(portrait, (0, 0), combined_mask)
+        return card, 0
+
+    def lineup_layout(self, player_count):
+        card_size = (
+            max(1, int(600 * LINEUP_PLAYER_CARD_SCALE)),
+            max(1, int(450 * LINEUP_PLAYER_CARD_SCALE)),
+        )
+
+        if player_count <= 3:
+            return [
+                {"center": (540, 585), "size": card_size},
+                {"center": (200, 585), "size": card_size},
+                {"center": (880, 585), "size": card_size},
+            ][:player_count]
+
+        return [
+            {"center": (540, 605), "size": card_size},
+            {"center": (365, 515), "size": card_size},
+            {"center": (715, 515), "size": card_size},
+            {"center": (225, 430), "size": card_size},
+            {"center": (855, 430), "size": card_size},
+        ][:player_count]
+
+    def draw_centered_text(self, draw, text, center_x, top_y, max_width, start_size, min_size=18, bold=True, fill="#FFFFFF"):
+        font_size = start_size
+        font = get_font(font_size, bold=bold)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_w = bbox[2] - bbox[0]
+
+        while text_w > max_width and font_size > min_size:
+            font_size -= 2
+            font = get_font(font_size, bold=bold)
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_w = bbox[2] - bbox[0]
+
+        text_h = bbox[3] - bbox[1]
+        draw.text((int(center_x - (text_w / 2)), top_y), text, font=font, fill=fill)
+        return text_h
+
+    def draw_lineup_logo_block(self, img, center_x, top_y):
+        block_size = (
+            max(1, int(380 * LINEUP_TEAM_LOGO_SCALE)),
+            max(1, int(230 * LINEUP_TEAM_LOGO_SCALE)),
+        )
+        block_pos = (int(center_x - (block_size[0] / 2)), top_y)
+        block = Image.new("RGBA", block_size, (0, 0, 0, 0))
+        block_draw = ImageDraw.Draw(block)
+
+        home_logo = self.load_image_source(image_path=self.selected_home_logo_path())
+        if home_logo is not None:
+            logo = resize_fit_box(
+                home_logo,
+                max(1, int(330 * LINEUP_TEAM_LOGO_SCALE)),
+                max(1, int(180 * LINEUP_TEAM_LOGO_SCALE)),
+            )
+            logo_x = int((block_size[0] - logo.size[0]) / 2)
+            logo_y = int((block_size[1] - logo.size[1]) / 2)
+            block.alpha_composite(logo, (logo_x, logo_y))
+        else:
+            self.draw_centered_text(
+                block_draw,
+                "TEAM LOGO",
+                block_size[0] / 2,
+                int((block_size[1] / 2) - 28),
+                block_size[0] - 30,
+                54,
+                min_size=24,
+                bold=True,
+                fill="#10233A",
+            )
+
+        img.alpha_composite(block, block_pos)
+
+    def build_lineup_image(self, img, template):
+        draw = ImageDraw.Draw(img)
+        accent_rgb = hex_to_rgb(template.get("accent"), fallback=(255, 255, 255))
+        player_count = self.current_lineup_player_count()
+        layout = self.lineup_layout(player_count)
+        placeholder_img = self.lineup_placeholder_image(template)
+        cluster_bottom = 0
+        for idx in range(player_count - 1, -1, -1):
+            slot = layout[idx]
+            player_path = self.lineup_player_image_paths[idx]
+            if player_path and os.path.exists(player_path):
+                player_img = self.load_image_source(image_path=player_path)
+            else:
+                player_img = placeholder_img
+
+            if player_img is None:
+                continue
+
+            card_with_glow, glow_padding = self.build_lineup_player_card(player_img, slot["size"], accent_rgb)
+            card_x = int(slot["center"][0] - (slot["size"][0] / 2) - glow_padding)
+            card_y = int(slot["center"][1] - (slot["size"][1] / 2) - glow_padding)
+            img.alpha_composite(card_with_glow, (card_x, card_y))
+            cluster_bottom = max(cluster_bottom, card_y + card_with_glow.size[1])
+
+        if player_count <= 3:
+            name_order = [1, 0, 2]
+        else:
+            name_order = [3, 1, 0, 2, 4]
+
+        main_player_names = []
+        for idx in name_order[:player_count]:
+            player_name = self.lineup_player_name_vars[idx].get().strip() or f"PLAYER {idx + 1}"
+            main_player_names.append(player_name.upper())
+
+        names_display = " | ".join(main_player_names)
+        names_y = cluster_bottom + 20
+        names_height = self.draw_centered_text(
+            draw,
+            names_display,
+            CANVAS_SIZE[0] / 2,
+            names_y,
+            CANVAS_SIZE[0] - 120,
+            44,
+            min_size=20,
+            bold=True,
+        )
+
+        standins_text = self.lineup_standins_var.get().strip()
+        standins_display = ""
+        if standins_text:
+            raw_names = re.split(r"[|,]+", standins_text)
+            normalized_names = [name.strip().upper() for name in raw_names if name.strip()]
+            if normalized_names:
+                standins_display = " | ".join(normalized_names)
+
+        if standins_display:
+            standins_y = names_y + names_height + LINEUP_NAMES_TO_STANDINS_GAP
+            self.draw_centered_text(
+                draw,
+                standins_display,
+                CANVAS_SIZE[0] / 2,
+                standins_y,
+                CANVAS_SIZE[0] - 100,
+                28,
+                min_size=18,
+                bold=True,
+            )
+
+        self.draw_lineup_logo_block(img, CANVAS_SIZE[0] / 2, CANVAS_SIZE[1] - 350)
+        return img
+
     def build_player_welcome_image(self, img, template):
         player_img = None
         if self.player_image_path and os.path.exists(self.player_image_path):
@@ -1461,7 +1857,7 @@ class PostingApp(tk.Tk):
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
         text_x = int((CANVAS_SIZE[0] - text_w) / 2)
-        text_y = int(CANVAS_SIZE[1] - text_h - 50)
+        text_y = int(CANVAS_SIZE[1] - text_h - 120)
         draw.text((text_x, text_y), player_name, font=name_font, fill="#FFFFFF")
 
         return img
@@ -1485,6 +1881,9 @@ class PostingApp(tk.Tk):
         if post_type == "Spieler-Welcome":
             player_welcome_img = self.build_player_welcome_image(img, template)
             return player_welcome_img.convert("RGB")
+        if post_type == "Lineup":
+            lineup_img = self.build_lineup_image(img, template)
+            return lineup_img.convert("RGB")
 
         draw = ImageDraw.Draw(img)
 

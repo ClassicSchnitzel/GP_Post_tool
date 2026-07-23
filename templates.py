@@ -10,6 +10,7 @@ POST_VERSIONS = [
     "Draw",
     "Liga-Teilnahme",
     "Spieler-Welcome",
+    "Lineup",
 ]
 
 POST_HEADLINES = {
@@ -19,6 +20,7 @@ POST_HEADLINES = {
     "Draw": "DRAW",
     "Liga-Teilnahme": "LIGA TEILNAHME",
     "Spieler-Welcome": "WELCOME",
+    "Lineup": "LINEUP",
 }
 
 
@@ -34,9 +36,11 @@ GAME_TEMPLATES = {
             "Draw": "assets/backgrounds/counter_strike/Draw.jpg",
             "Liga-Teilnahme": "assets/backgrounds/counter_strike/liga_teilnahme.jpg",
             "Spieler-Welcome": "assets/backgrounds/counter_strike/spieler_welcome.jpg",
+            "Lineup": "assets/backgrounds/counter_strike/Lineup.jpg",
         },
         "player_welcome_foreground": "assets/overlays/player_welcome_fade.png",
         "player_welcome_placeholder": "assets/placeholders/player_welcome_placeholder.png",
+        "lineup_options": [{"label": "5 Main Player", "player_count": 5}],
         "maps": ["Anubis", "Ancient", "Dust2", "Inferno", "Mirage", "Nuke", "Train", "Vertigo"],
         "leagues": ["FACEIT"],
     },
@@ -51,9 +55,11 @@ GAME_TEMPLATES = {
             "Draw": "assets/backgrounds/rainbow_six/Draw.jpg",
             "Liga-Teilnahme": "assets/backgrounds/rainbow_six/liga_teilnahme.jpg",
             "Spieler-Welcome": "assets/backgrounds/rainbow_six/spieler_welcome.jpg",
+            "Lineup": "assets/backgrounds/rainbow_six/Lineup.jpg",
         },
         "player_welcome_foreground": "assets/overlays/player_welcome_fade.png",
         "player_welcome_placeholder": "assets/placeholders/player_welcome_placeholder.png",
+        "lineup_options": [{"label": "5 Main Player", "player_count": 5}],
         "maps": ["Clubhouse", "Oregon", "Kafe", "Bank", "Chalet", "Border", "Nighthaven", "Clubhouse", "Lair", "Konsulat", "Skyscraper", "Villa"],
         "leagues": ["ESEA", "ESL", "Major"],
     },
@@ -68,9 +74,11 @@ GAME_TEMPLATES = {
             "Draw": "assets/backgrounds/rocket_league/Draw.jpg",
             "Liga-Teilnahme": "assets/backgrounds/rocket_league/liga_teilnahme.jpg",
             "Spieler-Welcome": "assets/backgrounds/rocket_league/spieler_welcome.jpg",
+            "Lineup": "assets/backgrounds/rocket_league/Lineup.jpg",
         },
         "player_welcome_foreground": "assets/overlays/player_welcome_fade.png",
         "player_welcome_placeholder": "assets/placeholders/player_welcome_placeholder.png",
+        "lineup_options": [{"label": "3 Main Player", "player_count": 3}],
         "maps": ["DFH Stadium", "Mannfield", "Champions Field", "Utopia Coliseum", "Neo Tokyo", "Aquadome"],
         "leagues": ["RLCS", "ESL", "Community Cup"],
     },
@@ -85,9 +93,14 @@ GAME_TEMPLATES = {
             "Draw": "assets/backgrounds/call_of_duty/Draw.jpg",
             "Liga-Teilnahme": "assets/backgrounds/call_of_duty/liga_teilnahme.jpg",
             "Spieler-Welcome": "assets/backgrounds/call_of_duty/spieler_welcome.jpg",
+            "Lineup": "assets/backgrounds/call_of_duty/Lineup.jpg",
         },
         "player_welcome_foreground": "assets/overlays/player_welcome_fade.png",
         "player_welcome_placeholder": "assets/placeholders/player_welcome_placeholder.png",
+        "lineup_options": [
+            {"label": "5 Main Player", "player_count": 5},
+            {"label": "3 Main Player", "player_count": 3},
+        ],
         "maps": ["Skidrow", "Terminal", "Highrise", "Rio", "Karachi", "Sub Base", "Invasion"],
         "leagues": ["CDL", "ESL", "Community Cup"],
     },
